@@ -176,12 +176,17 @@ function configureWorkItemTools(server: McpServer, tokenProvider: () => Promise<
         if (action === "get") {
           if (!id) return { content: [{ type: "text", text: "id is required for get" }], isError: true };
           let effectiveExpand = expand;
+          const expandIgnored = fields && fields.length > 0 && effectiveExpand != null && effectiveExpand.toLowerCase() !== "none";
           if (fields && fields.length > 0 && effectiveExpand != null) {
             effectiveExpand = "none";
           }
           const workItemApi = await connection.getWorkItemTrackingApi();
           const workItem = await workItemApi.getWorkItem(id, fields, asOf, effectiveExpand as unknown as WorkItemExpand, resolvedProject);
-          return { content: [{ type: "text", text: JSON.stringify(workItem, null, 2) }] };
+          const content: { type: "text"; text: string }[] = [{ type: "text", text: JSON.stringify(workItem, null, 2) }];
+          if (expandIgnored) {
+            content.push({ type: "text", text: `Note: expand "${expand}" was ignored because fields was also provided (they cannot be combined). Call again without fields to get ${expand}.` });
+          }
+          return { content };
         }
 
         if (action === "get_batch") {
@@ -388,6 +393,10 @@ function configureWorkItemTools(server: McpServer, tokenProvider: () => Promise<
           const workItemApi = await getReadReplicaWorkItemTrackingApi(connection);
           const teamContext = { project: resolvedProject, team };
           const queryResult = await workItemApi.queryByWiql({ query: wiql }, teamContext, timePrecision, top);
+          const returned = queryResult?.workItemRelations?.length ?? queryResult?.workItems?.length ?? 0;
+          if (top > 0 && returned >= top) {
+            return createExternalContentResponse({ ...queryResult, truncated: true, note: `Results stopped at top=${top}; more may match. Raise top to get them.` }, "wiql query results");
+          }
           return createExternalContentResponse(queryResult, "wiql query results");
         }
 

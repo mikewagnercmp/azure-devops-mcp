@@ -952,6 +952,26 @@ describe("configureWorkItemTools", () => {
       expect(mockWorkItemTrackingApi.getWorkItem).toHaveBeenCalledWith(params.id, params.fields, params.asOf, "none", params.project);
 
       expect(result.content[0].text).toBe(JSON.stringify(_mockWorkItem, null, 2));
+      // the caller is told expand was dropped, so missing relations are not read as "none exist"
+      expect(result.content).toHaveLength(2);
+      expect(result.content[1].text).toContain('expand "relations" was ignored because fields was also provided');
+    });
+
+    it("should not add an expand note when expand is none or fields is not provided", async () => {
+      configureWorkItemTools(server, tokenProvider, connectionProvider, userAgentProvider);
+
+      const call = (server.tool as jest.Mock).mock.calls.find(([toolName]) => toolName === "wit_work_item");
+      if (!call) throw new Error("wit_work_item tool not registered");
+      const [, , , handler] = call;
+
+      (mockWorkItemTrackingApi.getWorkItem as jest.Mock).mockResolvedValue(_mockWorkItem);
+
+      const withNone = await handler({ action: "get", id: 12, fields: ["System.Title"], expand: "None", project: "Contoso" });
+      expect(withNone.content).toHaveLength(1);
+
+      const withoutFields = await handler({ action: "get", id: 12, expand: "Relations", project: "Contoso" });
+      expect(mockWorkItemTrackingApi.getWorkItem).toHaveBeenLastCalledWith(12, undefined, undefined, "Relations", "Contoso");
+      expect(withoutFields.content).toHaveLength(1);
     });
   });
 
@@ -5653,6 +5673,52 @@ describe("configureWorkItemTools", () => {
   });
 
   describe("query_by_wiql tool", () => {
+    it("should flag results that stopped at top", async () => {
+      configureWorkItemTools(server, tokenProvider, connectionProvider, userAgentProvider);
+
+      const call = (server.tool as jest.Mock).mock.calls.find(([toolName]) => toolName === "wit_query");
+      if (!call) throw new Error("wit_query tool not registered");
+      const [, , , handler] = call;
+
+      const full = { ...(_mockWiqlQueryResults as object), workItems: [{ id: 1 }, { id: 2 }] };
+      (mockWorkItemTrackingApi.queryByWiql as jest.Mock).mockResolvedValue(full);
+
+      const result = await handler({ action: "wiql", wiql: "SELECT [System.Id] FROM WorkItems", project: "Contoso", top: 2 });
+
+      expect(result.content[0].text).toContain('"truncated": true');
+      expect(result.content[0].text).toContain("Results stopped at top=2");
+    });
+
+    it("should flag link query results that stopped at top", async () => {
+      configureWorkItemTools(server, tokenProvider, connectionProvider, userAgentProvider);
+
+      const call = (server.tool as jest.Mock).mock.calls.find(([toolName]) => toolName === "wit_query");
+      if (!call) throw new Error("wit_query tool not registered");
+      const [, , , handler] = call;
+
+      const links = { queryType: 3, queryResultType: 2, workItemRelations: [{ target: { id: 1 } }, { source: { id: 1 }, target: { id: 2 } }] };
+      (mockWorkItemTrackingApi.queryByWiql as jest.Mock).mockResolvedValue(links);
+
+      const result = await handler({ action: "wiql", wiql: "SELECT [System.Id] FROM WorkItemLinks WHERE [Source.Id] = 1", project: "Contoso", top: 2 });
+
+      expect(result.content[0].text).toContain('"truncated": true');
+    });
+
+    it("should not flag results below top", async () => {
+      configureWorkItemTools(server, tokenProvider, connectionProvider, userAgentProvider);
+
+      const call = (server.tool as jest.Mock).mock.calls.find(([toolName]) => toolName === "wit_query");
+      if (!call) throw new Error("wit_query tool not registered");
+      const [, , , handler] = call;
+
+      const partial = { ...(_mockWiqlQueryResults as object), workItems: [{ id: 1 }] };
+      (mockWorkItemTrackingApi.queryByWiql as jest.Mock).mockResolvedValue(partial);
+
+      const result = await handler({ action: "wiql", wiql: "SELECT [System.Id] FROM WorkItems", project: "Contoso", top: 2 });
+
+      expect(result.content[0].text).not.toContain("truncated");
+    });
+
     it("should call queryByWiql with correct params when project is provided", async () => {
       configureWorkItemTools(server, tokenProvider, connectionProvider, userAgentProvider);
 
